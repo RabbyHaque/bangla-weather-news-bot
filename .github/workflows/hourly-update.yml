@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Send Weather Update
+      - name: Get Weather and Send Telegram Update
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
@@ -18,82 +18,303 @@ jobs:
           python - <<'PY'
           import os
           import requests
+          from datetime import datetime
 
           TOKEN = os.environ["BOT_TOKEN"]
           CHAT_ID = os.environ["CHAT_ID"]
 
-          lat = 23.6400
-          lon = 88.8500
+          # ==========================================
+          # চুয়াডাঙ্গা অবস্থান
+          # ==========================================
+
+          LAT = 23.6400
+          LON = 88.8500
+
+          # ==========================================
+          # Open-Meteo API
+          # ==========================================
 
           url = (
               "https://api.open-meteo.com/v1/forecast"
-              f"?latitude={lat}"
-              f"&longitude={lon}"
+              f"?latitude={LAT}"
+              f"&longitude={LON}"
               "&current=temperature_2m,"
               "relative_humidity_2m,"
               "apparent_temperature,"
               "precipitation,"
               "weather_code,"
-              "wind_speed_10m"
+              "wind_speed_10m,"
+              "wind_gusts_10m"
+              "&hourly=temperature_2m,"
+              "precipitation_probability,"
+              "precipitation,"
+              "weather_code,"
+              "wind_speed_10m,"
+              "relative_humidity_2m,"
+              "uv_index"
+              "&daily=temperature_2m_max,"
+              "temperature_2m_min,"
+              "precipitation_sum,"
+              "precipitation_probability_max,"
+              "weather_code"
               "&timezone=Asia%2FDhaka"
+              "&forecast_days=2"
           )
 
-          data = requests.get(url, timeout=20).json()
-          current = data["current"]
+          response = requests.get(url, timeout=30)
+          response.raise_for_status()
 
-          codes = {
+          data = response.json()
+
+          current = data["current"]
+          hourly = data["hourly"]
+          daily = data["daily"]
+
+          # ==========================================
+          # আবহাওয়ার কোড
+          # ==========================================
+
+          weather_codes = {
               0: "☀️ পরিষ্কার আকাশ",
               1: "🌤️ প্রধানত পরিষ্কার",
               2: "⛅ আংশিক মেঘলা",
               3: "☁️ মেঘলা",
-              45: "🌫️ কুয়াশা",
-              48: "🌫️ কুয়াশা",
-              51: "🌦️ হালকা গুঁড়ি বৃষ্টি",
-              53: "🌦️ গুঁড়ি বৃষ্টি",
-              55: "🌧️ বেশি গুঁড়ি বৃষ্টি",
+              45: "🌫️ কুয়াশা",
+              48: "🌫️ কুয়াশা",
+              51: "🌦️ হালকা গুঁড়ি বৃষ্টি",
+              53: "🌦️ গুঁড়ি বৃষ্টি",
+              55: "🌧️ বেশি গুঁড়ি বৃষ্টি",
+              56: "🌧️ হিমশীতল গুঁড়ি বৃষ্টি",
+              57: "🌧️ হিমশীতল গুঁড়ি বৃষ্টি",
               61: "🌦️ হালকা বৃষ্টি",
               63: "🌧️ মাঝারি বৃষ্টি",
               65: "🌧️ ভারী বৃষ্টি",
+              66: "🌧️ হিমশীতল বৃষ্টি",
+              67: "🌧️ হিমশীতল ভারী বৃষ্টি",
+              71: "🌨️ হালকা তুষার",
+              73: "🌨️ মাঝারি তুষার",
+              75: "🌨️ ভারী তুষার",
+              77: "🌨️ তুষার কণা",
               80: "🌦️ বৃষ্টির ঝাপটা",
               81: "🌧️ বৃষ্টির ঝাপটা",
               82: "⛈️ ভারী বৃষ্টির ঝাপটা",
-              95: "⛈️ বজ্রঝড়",
-              96: "⛈️ বজ্রঝড় ও শিলাবৃষ্টি",
-              99: "⛈️ বজ্রঝড় ও শিলাবৃষ্টি"
+              85: "🌨️ তুষারের ঝাপটা",
+              86: "🌨️ ভারী তুষারের ঝাপটা",
+              95: "⛈️ বজ্রঝড়",
+              96: "⛈️ বজ্রঝড় ও শিলাবৃষ্টি",
+              99: "⛈️ শক্তিশালী বজ্রঝড় ও শিলাবৃষ্টি"
           }
 
-          condition = codes.get(
-              current["weather_code"],
+          # ==========================================
+          # বর্তমান আবহাওয়া
+          # ==========================================
+
+          current_code = current["weather_code"]
+
+          current_condition = weather_codes.get(
+              current_code,
               "🌤️ আবহাওয়া"
           )
 
+          temperature = current["temperature_2m"]
+          feels_like = current["apparent_temperature"]
+          humidity = current["relative_humidity_2m"]
+          rain_now = current["precipitation"]
+          wind = current["wind_speed_10m"]
+          gust = current["wind_gusts_10m"]
+
+          # ==========================================
+          # বর্তমান সময়
+          # ==========================================
+
+          now = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+
+          # ==========================================
+          # পরবর্তী ১, ৩ ও ৬ ঘণ্টার বৃষ্টির সম্ভাবনা
+          # ==========================================
+
+          rain_probabilities = hourly["precipitation_probability"]
+          rain_amounts = hourly["precipitation"]
+
+          next_1 = rain_probabilities[0]
+          next_3 = max(rain_probabilities[:3])
+          next_6 = max(rain_probabilities[:6])
+
+          rain_1_amount = sum(rain_amounts[:1])
+          rain_3_amount = sum(rain_amounts[:3])
+          rain_6_amount = sum(rain_amounts[:6])
+
+          # ==========================================
+          # আজকের পূর্বাভাস
+          # ==========================================
+
+          today_max = daily["temperature_2m_max"][0]
+          today_min = daily["temperature_2m_min"][0]
+
+          today_rain = daily["precipitation_sum"][0]
+          today_rain_probability = daily[
+              "precipitation_probability_max"
+          ][0]
+
+          # ==========================================
+          # সতর্কতা তৈরি
+          # ==========================================
+
+          alerts = []
+
+          # ভারী বৃষ্টি
+          if next_6 >= 70 or rain_6_amount >= 10:
+              alerts.append(
+                  "🌧️ আগামী কয়েক ঘণ্টায় বৃষ্টির সম্ভাবনা বেশি।"
+              )
+
+          # খুব বেশি বৃষ্টি
+          if rain_6_amount >= 20:
+              alerts.append(
+                  "⚠️ ভারী বৃষ্টির সম্ভাবনা রয়েছে।"
+              )
+
+          # বজ্রঝড়
+          next_codes = hourly["weather_code"][:6]
+
+          if any(code in [95, 96, 99] for code in next_codes):
+              alerts.append(
+                  "⛈️ আগামী কয়েক ঘণ্টায় বজ্রঝড়ের সম্ভাবনা রয়েছে।"
+              )
+
+          # বাতাস
+          if wind >= 35 or gust >= 50:
+              alerts.append(
+                  "💨 বাতাসের গতি বেশি—সতর্ক থাকুন।"
+              )
+
+          # ==========================================
+          # কৃষি সতর্কতা
+          # ==========================================
+
+          farming_advice = []
+
+          if next_3 >= 60:
+              farming_advice.append(
+                  "🌾 বৃষ্টির সম্ভাবনা বেশি—এখন কীটনাশক/ছত্রাকনাশক স্প্রে না করাই ভালো।"
+              )
+
+          if next_6 >= 70:
+              farming_advice.append(
+                  "💧 সেচ দেওয়ার আগে আগামী কয়েক ঘণ্টার বৃষ্টির সম্ভাবনা বিবেচনা করুন।"
+              )
+
+          if rain_6_amount >= 10:
+              farming_advice.append(
+                  "🌱 জমিতে পানি জমে থাকলে দ্রুত নিষ্কাশনের ব্যবস্থা রাখুন।"
+              )
+
+          if not farming_advice:
+              farming_advice.append(
+                  "✅ বর্তমানে বড় ধরনের আবহাওয়াজনিত কৃষি সতর্কতা পাওয়া যায়নি।"
+              )
+
+          # ==========================================
+          # সতর্কতা অংশ
+          # ==========================================
+
+          if alerts:
+              alert_text = "\n".join(
+                  f"• {item}" for item in alerts
+              )
+          else:
+              alert_text = (
+                  "✅ আগামী কয়েক ঘণ্টায় বড় ধরনের "
+                  "আবহাওয়া সতর্কতা নেই।"
+              )
+
+          # ==========================================
+          # কৃষি পরামর্শ
+          # ==========================================
+
+          farming_text = "\n".join(
+              f"• {item}" for item in farming_advice
+          )
+
+          # ==========================================
+          # Telegram Message
+          # ==========================================
+
           message = f"""
-          🌦️ চুয়াডাঙ্গার আবহাওয়া আপডেট
+🌦️ চুয়াডাঙ্গা আবহাওয়া আপডেট
 
-          🌡️ তাপমাত্রা: {current['temperature_2m']}°C
-          🤒 অনুভূত তাপমাত্রা: {current['apparent_temperature']}°C
-          💧 আর্দ্রতা: {current['relative_humidity_2m']}%
-          🌧️ বৃষ্টি: {current['precipitation']} mm
-          💨 বাতাস: {current['wind_speed_10m']} km/h
-          ☁️ অবস্থা: {condition}
+🕐 সময়: {now}
 
-          🕐 স্বয়ংক্রিয় ঘণ্টাভিত্তিক আপডেট
-          """
+━━━━━━━━━━━━━━━━━━
+
+🌡️ বর্তমান অবস্থা
+
+🌡️ তাপমাত্রা: {temperature}°C
+🤒 অনুভূত: {feels_like}°C
+💧 আর্দ্রতা: {humidity}%
+☁️ অবস্থা: {current_condition}
+🌧️ বর্তমানে বৃষ্টি: {rain_now} mm
+💨 বাতাস: {wind} km/h
+💨 সর্বোচ্চ ঝাপটা: {gust} km/h
+
+━━━━━━━━━━━━━━━━━━
+
+🌧️ বৃষ্টির সম্ভাবনা
+
+⏱️ ১ ঘণ্টা: {next_1}%
+⏱️ ৩ ঘণ্টা: {next_3}%
+⏱️ ৬ ঘণ্টা: {next_6}%
+
+💧 ১ ঘণ্টায় সম্ভাব্য বৃষ্টি: {rain_1_amount:.1f} mm
+💧 ৩ ঘণ্টায় সম্ভাব্য বৃষ্টি: {rain_3_amount:.1f} mm
+💧 ৬ ঘণ্টায় সম্ভাব্য বৃষ্টি: {rain_6_amount:.1f} mm
+
+━━━━━━━━━━━━━━━━━━
+
+📅 আজকের পূর্বাভাস
+
+🌡️ সর্বোচ্চ: {today_max}°C
+🌡️ সর্বনিম্ন: {today_min}°C
+🌧️ বৃষ্টির সম্ভাবনা: {today_rain_probability}%
+💧 মোট বৃষ্টির সম্ভাব্য পরিমাণ: {today_rain} mm
+
+━━━━━━━━━━━━━━━━━━
+
+⛈️ আবহাওয়া সতর্কতা
+
+{alert_text}
+
+━━━━━━━━━━━━━━━━━━
+
+🌾 কৃষি পরামর্শ
+
+{farming_text}
+
+━━━━━━━━━━━━━━━━━━
+
+🤖 বাংলা কৃষি ও আবহাওয়া বট
+🕐 প্রতি ঘণ্টায় স্বয়ংক্রিয় আপডেট
+"""
+
+          # ==========================================
+          # Telegram API
+          # ==========================================
 
           telegram_url = (
               f"https://api.telegram.org/bot{TOKEN}/sendMessage"
           )
 
-          response = requests.post(
+          telegram_response = requests.post(
               telegram_url,
               json={
                   "chat_id": CHAT_ID,
                   "text": message.strip()
               },
-              timeout=20
+              timeout=30
           )
 
-          response.raise_for_status()
+          telegram_response.raise_for_status()
 
           print("✅ Weather update sent successfully")
+          print(telegram_response.json())
           PY
