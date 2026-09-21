@@ -1,9 +1,8 @@
 import os
-import asyncio
 import logging
-from datetime import datetime
-
 import requests
+
+from flask import Flask
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -12,17 +11,14 @@ from telegram.ext import (
 )
 
 # =========================
-# CONFIGURATION
+# CONFIG
 # =========================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Default location: Chuadanga
 LATITUDE = 23.6401
 LONGITUDE = 88.8410
 LOCATION_NAME = "চুয়াডাঙ্গা"
-
-TIMEZONE = "Asia/Dhaka"
 
 # =========================
 # LOGGING
@@ -35,9 +31,25 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# =========================
+# FLASK APP
+# =========================
+
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+    return "বাংলা আবহাওয়া Telegram Bot চালু আছে ✅"
+
+
+@app.route("/health")
+def health():
+    return "OK"
+
 
 # =========================
-# WEATHER CODE → BANGLA
+# WEATHER CODES
 # =========================
 
 WEATHER_CODES = {
@@ -53,10 +65,7 @@ WEATHER_CODES = {
     61: "🌦️ হালকা বৃষ্টি",
     63: "🌧️ মাঝারি বৃষ্টি",
     65: "🌧️ ভারী বৃষ্টি",
-    71: "🌨️ হালকা তুষারপাত",
-    73: "🌨️ মাঝারি তুষারপাত",
-    75: "❄️ ভারী তুষারপাত",
-    80: "🌦️ হালকা বৃষ্টির ঝাপটা",
+    80: "🌦️ বৃষ্টির ঝাপটা",
     81: "🌧️ মাঝারি বৃষ্টির ঝাপটা",
     82: "⛈️ ভারী বৃষ্টির ঝাপটা",
     95: "⛈️ বজ্রঝড়",
@@ -66,10 +75,11 @@ WEATHER_CODES = {
 
 
 # =========================
-# GET WEATHER
+# WEATHER API
 # =========================
 
 def get_weather():
+
     url = "https://api.open-meteo.com/v1/forecast"
 
     params = {
@@ -90,21 +100,26 @@ def get_weather():
             "weather_code,"
             "wind_speed_10m"
         ),
-        "timezone": TIMEZONE,
+        "timezone": "Asia/Dhaka",
         "forecast_days": 2,
     }
 
-    response = requests.get(url, params=params, timeout=20)
+    response = requests.get(
+        url,
+        params=params,
+        timeout=20
+    )
+
     response.raise_for_status()
 
     return response.json()
 
 
 # =========================
-# FORMAT WEATHER MESSAGE
+# WEATHER MESSAGE
 # =========================
 
-def create_weather_message():
+def weather_message():
 
     data = get_weather()
 
@@ -112,135 +127,125 @@ def create_weather_message():
 
     temperature = current["temperature_2m"]
     humidity = current["relative_humidity_2m"]
-    precipitation = current["precipitation"]
     rain = current["rain"]
+    precipitation = current["precipitation"]
     wind = current["wind_speed_10m"]
-    weather_code = current["weather_code"]
+    code = current["weather_code"]
 
-    weather_text = WEATHER_CODES.get(
-        weather_code,
+    condition = WEATHER_CODES.get(
+        code,
         "🌦️ পরিবর্তনশীল আবহাওয়া"
     )
-
-    now = datetime.now()
 
     message = f"""
 🌦️ <b>বাংলা আবহাওয়া আপডেট</b>
 
 📍 এলাকা: <b>{LOCATION_NAME}</b>
-🕐 সময়: {now.strftime("%d-%m-%Y %I:%M %p")}
-
-━━━━━━━━━━━━━━
 
 🌡️ তাপমাত্রা: <b>{temperature}°C</b>
 💧 আর্দ্রতা: <b>{humidity}%</b>
-🌧️ বর্তমান বৃষ্টি: <b>{rain} mm</b>
+🌧️ বৃষ্টি: <b>{rain} mm</b>
 💦 বৃষ্টিপাত: <b>{precipitation} mm</b>
-💨 বাতাসের গতি: <b>{wind} km/h</b>
+💨 বাতাস: <b>{wind} km/h</b>
 
-☁️ অবস্থা:
-<b>{weather_text}</b>
+☁️ আবহাওয়া:
+<b>{condition}</b>
 
-━━━━━━━━━━━━━━
-
-🌾 <b>কৃষি আবহাওয়া সতর্কতা</b>
+🌾 <b>কৃষি সতর্কতা</b>
 """
 
-    # কৃষি সতর্কতা
-
     if rain > 0:
-        message += (
-            "\n🌧️ বর্তমানে বৃষ্টি হচ্ছে।"
-            "\n⚠️ এই সময়ে কীটনাশক/ছত্রাকনাশক স্প্রে না করাই ভালো।"
-        )
 
-    elif weather_code in [95, 96, 99]:
-        message += (
-            "\n⛈️ বজ্রঝড়ের সম্ভাবনা রয়েছে।"
-            "\n⚠️ খোলা মাঠে কাজ করার সময় সতর্ক থাকুন।"
-        )
+        message += """
+🌧️ বর্তমানে বৃষ্টি হচ্ছে।
+
+⚠️ এখন কীটনাশক বা ছত্রাকনাশক স্প্রে না করাই ভালো।
+"""
+
+    elif code in [95, 96, 99]:
+
+        message += """
+⛈️ বজ্রঝড়ের সম্ভাবনা রয়েছে।
+
+⚠️ খোলা মাঠে কাজ করার সময় সতর্ক থাকুন।
+"""
 
     elif temperature >= 35:
-        message += (
-            "\n🔥 তাপমাত্রা বেশি।"
-            "\n💧 ফসলের পানির চাহিদা বাড়তে পারে।"
-        )
+
+        message += """
+🔥 তাপমাত্রা বেশি।
+
+💧 ফসলে পানির প্রয়োজন বাড়তে পারে।
+"""
 
     else:
-        message += (
-            "\n✅ বর্তমানে বড় ধরনের আবহাওয়া সতর্কতা নেই।"
-        )
 
-    message += "\n\n🤖 <i>স্বয়ংক্রিয় আবহাওয়া বট</i>"
+        message += """
+✅ বর্তমানে বড় ধরনের আবহাওয়া সতর্কতা নেই।
+"""
 
     return message
 
 
 # =========================
-# /START
+# START
 # =========================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    message = """
-🌦️ <b>স্বাগতম!</b>
-
-আমি আপনার বাংলা আবহাওয়া ও সংবাদ বট।
-
-এখানে আপনি পাবেন:
-
-🌡️ বর্তমান আবহাওয়া
-🌧️ বৃষ্টির পূর্বাভাস
-⛈️ আবহাওয়া সতর্কতা
-🌾 কৃষি আবহাওয়া পরামর্শ
-📰 সর্বশেষ সংবাদ
-
-<b>কমান্ড:</b>
-
-/weather - বর্তমান আবহাওয়া
-/forecast - আবহাওয়ার পূর্বাভাস
-/rain - বৃষ্টির সম্ভাবনা
-/news - সর্বশেষ সংবাদ
-/help - সাহায্য
-
-⏰ প্রতি ঘণ্টায় স্বয়ংক্রিয় আপডেট ব্যবস্থা পরবর্তীতে চালু করা হবে।
-"""
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     await update.message.reply_text(
-        message,
+        """
+🌦️ <b>স্বাগতম!</b>
+
+আমি আপনার বাংলা আবহাওয়া বট।
+
+/weather - বর্তমান আবহাওয়া
+/forecast - পূর্বাভাস
+/rain - বৃষ্টির সম্ভাবনা
+/help - সাহায্য
+""",
         parse_mode="HTML"
     )
 
 
 # =========================
-# /WEATHER
+# WEATHER COMMAND
 # =========================
 
-async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def weather(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     try:
 
-        message = create_weather_message()
+        message = weather_message()
 
         await update.message.reply_text(
             message,
             parse_mode="HTML"
         )
 
-    except Exception as e:
+    except Exception as error:
 
-        logger.error(e)
+        logger.error(error)
 
         await update.message.reply_text(
-            "❌ দুঃখিত, এই মুহূর্তে আবহাওয়ার তথ্য পাওয়া যাচ্ছে না।"
+            "❌ আবহাওয়ার তথ্য পাওয়া যাচ্ছে না।"
         )
 
 
 # =========================
-# /FORECAST
+# FORECAST
 # =========================
 
-async def forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def forecast(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     try:
 
@@ -248,13 +253,17 @@ async def forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         hourly = data["hourly"]
 
-        message = "📅 <b>আগামী কয়েক ঘণ্টার আবহাওয়া</b>\n\n"
+        message = "📅 <b>আগামী কয়েক ঘণ্টার পূর্বাভাস</b>\n\n"
 
-        for i in range(0, min(12, len(hourly["time"]))):
+        for i in range(
+            min(12, len(hourly["time"]))
+        ):
 
             time = hourly["time"][i]
             temp = hourly["temperature_2m"][i]
-            rain_probability = hourly["precipitation_probability"][i]
+            probability = hourly[
+                "precipitation_probability"
+            ][i]
 
             code = hourly["weather_code"][i]
 
@@ -266,7 +275,8 @@ async def forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += (
                 f"🕐 {time[11:16]}\n"
                 f"🌡️ {temp}°C\n"
-                f"🌧️ বৃষ্টির সম্ভাবনা: {rain_probability}%\n"
+                f"🌧️ বৃষ্টির সম্ভাবনা: "
+                f"{probability}%\n"
                 f"{condition}\n\n"
             )
 
@@ -275,9 +285,9 @@ async def forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
 
-    except Exception as e:
+    except Exception as error:
 
-        logger.error(e)
+        logger.error(error)
 
         await update.message.reply_text(
             "❌ পূর্বাভাস পাওয়া যাচ্ছে না।"
@@ -285,61 +295,65 @@ async def forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# /RAIN
+# RAIN
 # =========================
 
-async def rain(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def rain(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     try:
 
         data = get_weather()
 
-        hourly = data["hourly"]
+        probabilities = data["hourly"][
+            "precipitation_probability"
+        ][:12]
 
-        max_probability = max(
-            hourly["precipitation_probability"][:12]
-        )
+        maximum = max(probabilities)
 
-        if max_probability >= 70:
+        if maximum >= 70:
 
-            message = f"""
+            text = f"""
 🌧️ <b>বৃষ্টির সতর্কতা</b>
 
-আগামী কয়েক ঘণ্টায় সর্বোচ্চ বৃষ্টির সম্ভাবনা:
+আগামী কয়েক ঘণ্টায় সর্বোচ্চ
+বৃষ্টির সম্ভাবনা:
 
-<b>{max_probability}%</b>
+<b>{maximum}%</b>
 
-⚠️ বাইরে যাওয়ার বা কৃষিকাজের আগে আবহাওয়া দেখে নিন।
+⚠️ বাইরে যাওয়ার আগে আবহাওয়া দেখে নিন।
 """
 
-        elif max_probability >= 40:
+        elif maximum >= 40:
 
-            message = f"""
+            text = f"""
 🌦️ <b>বৃষ্টির সম্ভাবনা রয়েছে</b>
 
-সর্বোচ্চ সম্ভাবনা: <b>{max_probability}%</b>
+সর্বোচ্চ সম্ভাবনা:
 
-☔ প্রয়োজন হলে ছাতা সঙ্গে রাখুন।
+<b>{maximum}%</b>
 """
 
         else:
 
-            message = f"""
+            text = f"""
 ☀️ <b>বৃষ্টির সম্ভাবনা কম</b>
 
-আগামী কয়েক ঘণ্টায় সর্বোচ্চ সম্ভাবনা:
+সর্বোচ্চ সম্ভাবনা:
 
-<b>{max_probability}%</b>
+<b>{maximum}%</b>
 """
 
         await update.message.reply_text(
-            message,
+            text,
             parse_mode="HTML"
         )
 
-    except Exception as e:
+    except Exception as error:
 
-        logger.error(e)
+        logger.error(error)
 
         await update.message.reply_text(
             "❌ বৃষ্টির তথ্য পাওয়া যাচ্ছে না।"
@@ -347,32 +361,7 @@ async def rain(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# /NEWS
-# =========================
-
-async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    await update.message.reply_text(
-        """
-📰 <b>বাংলা সংবাদ</b>
-
-News system এখনো তৈরি করা হয়নি।
-
-পরবর্তী ধাপে এখানে:
-
-🇧🇩 বাংলাদেশের সংবাদ
-🌎 আন্তর্জাতিক সংবাদ
-🌾 কৃষি সংবাদ
-🌦️ আবহাওয়া সংবাদ
-
-স্বয়ংক্রিয়ভাবে যুক্ত করা হবে।
-""",
-        parse_mode="HTML"
-    )
-
-
-# =========================
-# /HELP
+# HELP
 # =========================
 
 async def help_command(
@@ -382,74 +371,69 @@ async def help_command(
 
     await update.message.reply_text(
         """
-🤖 <b>সহায়তা</b>
+🤖 <b>বটের কমান্ড</b>
 
-🌦️ /weather
-বর্তমান আবহাওয়া
-
-📅 /forecast
-আগামী কয়েক ঘণ্টার পূর্বাভাস
-
-🌧️ /rain
-বৃষ্টির সম্ভাবনা
-
-📰 /news
-সর্বশেষ সংবাদ
-
-/start
-বট শুরু করুন
+/weather — বর্তমান আবহাওয়া
+/forecast — পূর্বাভাস
+/rain — বৃষ্টির সম্ভাবনা
+/help — সাহায্য
 """,
         parse_mode="HTML"
     )
 
 
 # =========================
-# MAIN
+# TELEGRAM APPLICATION
 # =========================
 
-def main():
+telegram_app = None
 
-    if not BOT_TOKEN:
 
-        raise ValueError(
-            "BOT_TOKEN পাওয়া যায়নি। "
-            "Environment variable সেট করুন।"
-        )
+def create_bot():
 
-    application = (
+    global telegram_app
+
+    telegram_app = (
         Application.builder()
         .token(BOT_TOKEN)
         .build()
     )
 
-    application.add_handler(
+    telegram_app.add_handler(
         CommandHandler("start", start)
     )
 
-    application.add_handler(
+    telegram_app.add_handler(
         CommandHandler("weather", weather)
     )
 
-    application.add_handler(
+    telegram_app.add_handler(
         CommandHandler("forecast", forecast)
     )
 
-    application.add_handler(
+    telegram_app.add_handler(
         CommandHandler("rain", rain)
     )
 
-    application.add_handler(
-        CommandHandler("news", news)
-    )
-
-    application.add_handler(
+    telegram_app.add_handler(
         CommandHandler("help", help_command)
     )
 
-    print("🤖 বাংলা আবহাওয়া বট চালু হয়েছে...")
-
-    application.run_polling()
+    return telegram_app
 
 
 if __name__ == "__main__":
-    main()
+
+    if not BOT_TOKEN:
+
+        raise ValueError(
+            "BOT_TOKEN পাওয়া যায়নি।"
+        )
+
+    bot = create_bot()
+
+    print(
+        "🌦️ বাংলা আবহাওয়া Telegram Bot চালু হচ্ছে..."
+    )
+
+    bot.run_polling()
