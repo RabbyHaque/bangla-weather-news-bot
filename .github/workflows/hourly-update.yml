@@ -14,24 +14,26 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+        shell: bash
         run: |
-          python - <<'PY'
+          python <<'PY'
           import os
           import requests
           from datetime import datetime
+          from zoneinfo import ZoneInfo
 
           TOKEN = os.environ["BOT_TOKEN"]
           CHAT_ID = os.environ["CHAT_ID"]
 
           # ==========================================
-          # চুয়াডাঙ্গা অবস্থান
+          # চুয়াডাঙ্গা
           # ==========================================
 
           LAT = 23.6400
           LON = 88.8500
 
           # ==========================================
-          # Open-Meteo API
+          # Open-Meteo
           # ==========================================
 
           url = (
@@ -111,9 +113,9 @@ jobs:
 
           current_code = current["weather_code"]
 
-          current_condition = weather_codes.get(
+          condition = weather_codes.get(
               current_code,
-              "🌤️ আবহাওয়া"
+              "🌤️ আবহাওয়া স্বাভাবিক"
           )
 
           temperature = current["temperature_2m"]
@@ -124,13 +126,15 @@ jobs:
           gust = current["wind_gusts_10m"]
 
           # ==========================================
-          # বর্তমান সময়
+          # বাংলাদেশ সময়
           # ==========================================
 
-          now = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+          now = datetime.now(
+              ZoneInfo("Asia/Dhaka")
+          ).strftime("%d-%m-%Y %I:%M %p")
 
           # ==========================================
-          # পরবর্তী ১, ৩ ও ৬ ঘণ্টার বৃষ্টির সম্ভাবনা
+          # পরবর্তী ঘণ্টার বৃষ্টির তথ্য
           # ==========================================
 
           rain_probabilities = hourly["precipitation_probability"]
@@ -152,51 +156,56 @@ jobs:
           today_min = daily["temperature_2m_min"][0]
 
           today_rain = daily["precipitation_sum"][0]
+
           today_rain_probability = daily[
               "precipitation_probability_max"
           ][0]
 
           # ==========================================
-          # সতর্কতা তৈরি
+          # আবহাওয়া সতর্কতা
           # ==========================================
 
           alerts = []
 
-          # ভারী বৃষ্টি
-          if next_6 >= 70 or rain_6_amount >= 10:
+          if next_6 >= 70:
               alerts.append(
                   "🌧️ আগামী কয়েক ঘণ্টায় বৃষ্টির সম্ভাবনা বেশি।"
               )
 
-          # খুব বেশি বৃষ্টি
           if rain_6_amount >= 20:
               alerts.append(
-                  "⚠️ ভারী বৃষ্টির সম্ভাবনা রয়েছে।"
+                  "⚠️ আগামী ৬ ঘণ্টায় ভারী বৃষ্টির সম্ভাবনা রয়েছে।"
               )
 
-          # বজ্রঝড়
           next_codes = hourly["weather_code"][:6]
 
-          if any(code in [95, 96, 99] for code in next_codes):
+          if any(
+              code in [95, 96, 99]
+              for code in next_codes
+          ):
               alerts.append(
-                  "⛈️ আগামী কয়েক ঘণ্টায় বজ্রঝড়ের সম্ভাবনা রয়েছে।"
+                  "⛈️ বজ্রঝড়ের সম্ভাবনা রয়েছে।"
               )
 
-          # বাতাস
           if wind >= 35 or gust >= 50:
               alerts.append(
                   "💨 বাতাসের গতি বেশি—সতর্ক থাকুন।"
               )
 
+          if not alerts:
+              alerts.append(
+                  "✅ বড় ধরনের আবহাওয়া সতর্কতা নেই।"
+              )
+
           # ==========================================
-          # কৃষি সতর্কতা
+          # কৃষি পরামর্শ
           # ==========================================
 
           farming_advice = []
 
           if next_3 >= 60:
               farming_advice.append(
-                  "🌾 বৃষ্টির সম্ভাবনা বেশি—এখন কীটনাশক/ছত্রাকনাশক স্প্রে না করাই ভালো।"
+                  "🌾 বৃষ্টির সম্ভাবনা বেশি—সাধারণভাবে এখন স্প্রে না করাই নিরাপদ।"
               )
 
           if next_6 >= 70:
@@ -206,34 +215,22 @@ jobs:
 
           if rain_6_amount >= 10:
               farming_advice.append(
-                  "🌱 জমিতে পানি জমে থাকলে দ্রুত নিষ্কাশনের ব্যবস্থা রাখুন।"
+                  "🌱 জমিতে পানি জমলে দ্রুত নিষ্কাশনের ব্যবস্থা রাখুন।"
               )
 
           if not farming_advice:
               farming_advice.append(
-                  "✅ বর্তমানে বড় ধরনের আবহাওয়াজনিত কৃষি সতর্কতা পাওয়া যায়নি।"
+                  "✅ বর্তমানে বড় ধরনের আবহাওয়াজনিত কৃষি সতর্কতা নেই।"
               )
 
-          # ==========================================
-          # সতর্কতা অংশ
-          # ==========================================
-
-          if alerts:
-              alert_text = "\n".join(
-                  f"• {item}" for item in alerts
-              )
-          else:
-              alert_text = (
-                  "✅ আগামী কয়েক ঘণ্টায় বড় ধরনের "
-                  "আবহাওয়া সতর্কতা নেই।"
-              )
-
-          # ==========================================
-          # কৃষি পরামর্শ
-          # ==========================================
+          alert_text = "\n".join(
+              f"• {item}"
+              for item in alerts
+          )
 
           farming_text = "\n".join(
-              f"• {item}" for item in farming_advice
+              f"• {item}"
+              for item in farming_advice
           )
 
           # ==========================================
@@ -241,60 +238,65 @@ jobs:
           # ==========================================
 
           message = f"""
-🌦️ চুয়াডাঙ্গা আবহাওয়া আপডেট
+          🌦️ চুয়াডাঙ্গা আবহাওয়া আপডেট
 
-🕐 সময়: {now}
+          🕐 সময়: {now}
 
-━━━━━━━━━━━━━━━━━━
+          ━━━━━━━━━━━━━━━━━━
 
-🌡️ বর্তমান অবস্থা
+          🌡️ বর্তমান অবস্থা
 
-🌡️ তাপমাত্রা: {temperature}°C
-🤒 অনুভূত: {feels_like}°C
-💧 আর্দ্রতা: {humidity}%
-☁️ অবস্থা: {current_condition}
-🌧️ বর্তমানে বৃষ্টি: {rain_now} mm
-💨 বাতাস: {wind} km/h
-💨 সর্বোচ্চ ঝাপটা: {gust} km/h
+          🌡️ তাপমাত্রা: {temperature}°C
+          🤒 অনুভূত: {feels_like}°C
+          💧 আর্দ্রতা: {humidity}%
+          ☁️ অবস্থা: {condition}
+          🌧️ বর্তমানে বৃষ্টি: {rain_now} mm
+          💨 বাতাস: {wind} km/h
+          💨 সর্বোচ্চ ঝাপটা: {gust} km/h
 
-━━━━━━━━━━━━━━━━━━
+          ━━━━━━━━━━━━━━━━━━
 
-🌧️ বৃষ্টির সম্ভাবনা
+          🌧️ বৃষ্টির সম্ভাবনা
 
-⏱️ ১ ঘণ্টা: {next_1}%
-⏱️ ৩ ঘণ্টা: {next_3}%
-⏱️ ৬ ঘণ্টা: {next_6}%
+          ⏱️ ১ ঘণ্টা: {next_1}%
+          ⏱️ ৩ ঘণ্টা: {next_3}%
+          ⏱️ ৬ ঘণ্টা: {next_6}%
 
-💧 ১ ঘণ্টায় সম্ভাব্য বৃষ্টি: {rain_1_amount:.1f} mm
-💧 ৩ ঘণ্টায় সম্ভাব্য বৃষ্টি: {rain_3_amount:.1f} mm
-💧 ৬ ঘণ্টায় সম্ভাব্য বৃষ্টি: {rain_6_amount:.1f} mm
+          💧 ১ ঘণ্টায়: {rain_1_amount:.1f} mm
+          💧 ৩ ঘণ্টায়: {rain_3_amount:.1f} mm
+          💧 ৬ ঘণ্টায়: {rain_6_amount:.1f} mm
 
-━━━━━━━━━━━━━━━━━━
+          ━━━━━━━━━━━━━━━━━━
 
-📅 আজকের পূর্বাভাস
+          📅 আজকের পূর্বাভাস
 
-🌡️ সর্বোচ্চ: {today_max}°C
-🌡️ সর্বনিম্ন: {today_min}°C
-🌧️ বৃষ্টির সম্ভাবনা: {today_rain_probability}%
-💧 মোট বৃষ্টির সম্ভাব্য পরিমাণ: {today_rain} mm
+          🌡️ সর্বোচ্চ: {today_max}°C
+          🌡️ সর্বনিম্ন: {today_min}°C
+          🌧️ বৃষ্টির সম্ভাবনা: {today_rain_probability}%
+          💧 সম্ভাব্য বৃষ্টি: {today_rain} mm
 
-━━━━━━━━━━━━━━━━━━
+          ━━━━━━━━━━━━━━━━━━
 
-⛈️ আবহাওয়া সতর্কতা
+          ⛈️ আবহাওয়া সতর্কতা
 
-{alert_text}
+          {alert_text}
 
-━━━━━━━━━━━━━━━━━━
+          ━━━━━━━━━━━━━━━━━━
 
-🌾 কৃষি পরামর্শ
+          🌾 কৃষি পরামর্শ
 
-{farming_text}
+          {farming_text}
 
-━━━━━━━━━━━━━━━━━━
+          ━━━━━━━━━━━━━━━━━━
 
-🤖 বাংলা কৃষি ও আবহাওয়া বট
-🕐 প্রতি ঘণ্টায় স্বয়ংক্রিয় আপডেট
-"""
+          🤖 বাংলা কৃষি ও আবহাওয়া বট
+          🕐 প্রতি ঘণ্টায় স্বয়ংক্রিয় আপডেট
+          """
+
+          message = "\n".join(
+              line.strip()
+              for line in message.strip().splitlines()
+          )
 
           # ==========================================
           # Telegram API
@@ -308,7 +310,7 @@ jobs:
               telegram_url,
               json={
                   "chat_id": CHAT_ID,
-                  "text": message.strip()
+                  "text": message
               },
               timeout=30
           )
