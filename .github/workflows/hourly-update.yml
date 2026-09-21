@@ -1,0 +1,99 @@
+name: Hourly Weather Update
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  weather:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Weather Update
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          TOKEN = os.environ["BOT_TOKEN"]
+          CHAT_ID = os.environ["CHAT_ID"]
+
+          lat = 23.6400
+          lon = 88.8500
+
+          url = (
+              "https://api.open-meteo.com/v1/forecast"
+              f"?latitude={lat}"
+              f"&longitude={lon}"
+              "&current=temperature_2m,"
+              "relative_humidity_2m,"
+              "apparent_temperature,"
+              "precipitation,"
+              "weather_code,"
+              "wind_speed_10m"
+              "&timezone=Asia%2FDhaka"
+          )
+
+          data = requests.get(url, timeout=20).json()
+          current = data["current"]
+
+          codes = {
+              0: "☀️ পরিষ্কার আকাশ",
+              1: "🌤️ প্রধানত পরিষ্কার",
+              2: "⛅ আংশিক মেঘলা",
+              3: "☁️ মেঘলা",
+              45: "🌫️ কুয়াশা",
+              48: "🌫️ কুয়াশা",
+              51: "🌦️ হালকা গুঁড়ি বৃষ্টি",
+              53: "🌦️ গুঁড়ি বৃষ্টি",
+              55: "🌧️ বেশি গুঁড়ি বৃষ্টি",
+              61: "🌦️ হালকা বৃষ্টি",
+              63: "🌧️ মাঝারি বৃষ্টি",
+              65: "🌧️ ভারী বৃষ্টি",
+              80: "🌦️ বৃষ্টির ঝাপটা",
+              81: "🌧️ বৃষ্টির ঝাপটা",
+              82: "⛈️ ভারী বৃষ্টির ঝাপটা",
+              95: "⛈️ বজ্রঝড়",
+              96: "⛈️ বজ্রঝড় ও শিলাবৃষ্টি",
+              99: "⛈️ বজ্রঝড় ও শিলাবৃষ্টি"
+          }
+
+          condition = codes.get(
+              current["weather_code"],
+              "🌤️ আবহাওয়া"
+          )
+
+          message = f"""
+          🌦️ চুয়াডাঙ্গার আবহাওয়া আপডেট
+
+          🌡️ তাপমাত্রা: {current['temperature_2m']}°C
+          🤒 অনুভূত তাপমাত্রা: {current['apparent_temperature']}°C
+          💧 আর্দ্রতা: {current['relative_humidity_2m']}%
+          🌧️ বৃষ্টি: {current['precipitation']} mm
+          💨 বাতাস: {current['wind_speed_10m']} km/h
+          ☁️ অবস্থা: {condition}
+
+          🕐 স্বয়ংক্রিয় ঘণ্টাভিত্তিক আপডেট
+          """
+
+          telegram_url = (
+              f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+          )
+
+          response = requests.post(
+              telegram_url,
+              json={
+                  "chat_id": CHAT_ID,
+                  "text": message.strip()
+              },
+              timeout=20
+          )
+
+          response.raise_for_status()
+
+          print("✅ Weather update sent successfully")
+          PY
