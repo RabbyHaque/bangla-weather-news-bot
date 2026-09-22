@@ -251,7 +251,7 @@ def home():
 
 @app.route("/health")
 def health():
-    return "OK"
+    return "", 204
 
 
 @app.route("/cron/weather")
