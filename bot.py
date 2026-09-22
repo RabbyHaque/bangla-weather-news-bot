@@ -10,11 +10,15 @@ CRON_SECRET = os.getenv("CRON_SECRET")
 
 app = Flask(__name__)
 
-# Chuadanga
 LAT = 23.6400
 LON = 88.8500
 
 TIMEZONE = "Asia/Dhaka"
+
+# আগের আবহাওয়ার snapshot
+# একই Render process চলতে থাকা অবস্থায় comparison করবে
+LAST_SNAPSHOT = None
+
 
 WEATHER_CODES = {
     0: "☀️ পরিষ্কার আকাশ",
@@ -56,7 +60,56 @@ WEATHER_CODES = {
 }
 
 
-def get_weather_report():
+def get_risk_level(
+    rain_6,
+    next_6_prob,
+    thunderstorm,
+    wind,
+    gust
+):
+    """
+    Overall weather risk.
+    """
+
+    if thunderstorm or gust >= 60:
+        return (
+            "🔴",
+            "উচ্চ ঝুঁকি",
+            "বিশেষ সতর্কতা প্রয়োজন।"
+        )
+
+    if (
+        rain_6 >= 20
+        or next_6_prob >= 80
+        or wind >= 40
+        or gust >= 50
+    ):
+        return (
+            "🟠",
+            "বেশি সতর্কতা",
+            "আবহাওয়ার পরিবর্তনের দিকে নজর রাখুন।"
+        )
+
+    if (
+        rain_6 >= 5
+        or next_6_prob >= 50
+        or wind >= 30
+        or gust >= 40
+    ):
+        return (
+            "🟡",
+            "সতর্কতা",
+            "পরবর্তী কয়েক ঘণ্টার আবহাওয়া নজরে রাখুন।"
+        )
+
+    return (
+        "🟢",
+        "স্বাভাবিক",
+        "বড় ধরনের আবহাওয়া ঝুঁকি নেই।"
+    )
+
+
+def get_weather_data():
 
     url = "https://api.open-meteo.com/v1/forecast"
 
@@ -102,14 +155,20 @@ def get_weather_report():
 
     response.raise_for_status()
 
-    data = response.json()
+    return response.json()
+
+
+def analyze_weather(data):
 
     current = data["current"]
     hourly = data["hourly"]
     daily = data["daily"]
 
+    tz = ZoneInfo(TIMEZONE)
+    now_dt = datetime.now(tz)
+
     # -------------------------------------------------
-    # বর্তমান আবহাওয়া
+    # Current weather
     # -------------------------------------------------
 
     condition = WEATHER_CODES.get(
@@ -125,103 +184,125 @@ def get_weather_report():
     gust = current["wind_gusts_10m"]
 
     # -------------------------------------------------
-    # বর্তমান সময়
+    # Find current/future hourly index
     # -------------------------------------------------
 
-    tz = ZoneInfo(TIMEZONE)
-    now_dt = datetime.now(tz)
+    start_index = 0
 
-    # Open-Meteo hourly সময়কে datetime-এ রূপান্তর
-    hourly_datetimes = []
+    for i, time_string in enumerate(hourly["time"]):
 
-    for time_string in hourly["time"]:
         dt = datetime.fromisoformat(time_string)
 
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=tz)
 
-        hourly_datetimes.append(dt)
-
-    # বর্তমান সময়ের কাছাকাছি/পরের ঘণ্টা খুঁজে বের করা
-    start_index = 0
-
-    for i, dt in enumerate(hourly_datetimes):
         if dt >= now_dt:
             start_index = i
             break
 
-    # আগামী ১, ৩ এবং ৬ ঘণ্টার data
-    next_1 = hourly["precipitation_probability"][
-        start_index:start_index + 1
-    ]
-
-    next_3 = hourly["precipitation_probability"][
-        start_index:start_index + 3
-    ]
-
-    next_6 = hourly["precipitation_probability"][
-        start_index:start_index + 6
-    ]
-
-    rain_1_data = hourly["precipitation"][
-        start_index:start_index + 1
-    ]
-
-    rain_3_data = hourly["precipitation"][
-        start_index:start_index + 3
-    ]
-
-    rain_6_data = hourly["precipitation"][
-        start_index:start_index + 6
-    ]
-
-    next_codes = hourly["weather_code"][
-        start_index:start_index + 6
-    ]
-
-    next_winds = hourly["wind_speed_10m"][
-        start_index:start_index + 6
-    ]
-
-    next_gusts = hourly["wind_gusts_10m"][
-        start_index:start_index + 6
-    ]
-
-    # নিরাপদ fallback
-    next_1_prob = max(next_1) if next_1 else 0
-    next_3_prob = max(next_3) if next_3 else 0
-    next_6_prob = max(next_6) if next_6 else 0
-
-    rain_1 = sum(rain_1_data)
-    rain_3 = sum(rain_3_data)
-    rain_6 = sum(rain_6_data)
-
-    max_next_wind = max(next_winds) if next_winds else 0
-    max_next_gust = max(next_gusts) if next_gusts else 0
-
     # -------------------------------------------------
-    # আজকের forecast
+    # Next hours
     # -------------------------------------------------
 
-    today_max = daily["temperature_2m_max"][0]
-    today_min = daily["temperature_2m_min"][0]
+    rain_prob_1 = hourly[
+        "precipitation_probability"
+    ][start_index:start_index + 1]
 
-    today_rain = daily["precipitation_sum"][0]
+    rain_prob_3 = hourly[
+        "precipitation_probability"
+    ][start_index:start_index + 3]
 
-    today_rain_probability = (
-        daily["precipitation_probability_max"][0]
+    rain_prob_6 = hourly[
+        "precipitation_probability"
+    ][start_index:start_index + 6]
+
+    rain_amount_1 = hourly[
+        "precipitation"
+    ][start_index:start_index + 1]
+
+    rain_amount_3 = hourly[
+        "precipitation"
+    ][start_index:start_index + 3]
+
+    rain_amount_6 = hourly[
+        "precipitation"
+    ][start_index:start_index + 6]
+
+    next_codes = hourly[
+        "weather_code"
+    ][start_index:start_index + 6]
+
+    next_winds = hourly[
+        "wind_speed_10m"
+    ][start_index:start_index + 6]
+
+    next_gusts = hourly[
+        "wind_gusts_10m"
+    ][start_index:start_index + 6]
+
+    next_1_prob = (
+        max(rain_prob_1)
+        if rain_prob_1
+        else 0
+    )
+
+    next_3_prob = (
+        max(rain_prob_3)
+        if rain_prob_3
+        else 0
+    )
+
+    next_6_prob = (
+        max(rain_prob_6)
+        if rain_prob_6
+        else 0
+    )
+
+    rain_1 = sum(rain_amount_1)
+    rain_3 = sum(rain_amount_3)
+    rain_6 = sum(rain_amount_6)
+
+    max_next_wind = (
+        max(next_winds)
+        if next_winds
+        else 0
+    )
+
+    max_next_gust = (
+        max(next_gusts)
+        if next_gusts
+        else 0
+    )
+
+    thunderstorm_codes = [95, 96, 99]
+
+    thunderstorm = any(
+        code in thunderstorm_codes
+        for code in next_codes
     )
 
     # -------------------------------------------------
-    # আবহাওয়া সতর্কতা
+    # Risk
+    # -------------------------------------------------
+
+    risk_icon, risk_name, risk_description = get_risk_level(
+        rain_6=rain_6,
+        next_6_prob=next_6_prob,
+        thunderstorm=thunderstorm,
+        wind=max(wind, max_next_wind),
+        gust=max(gust, max_next_gust)
+    )
+
+    # -------------------------------------------------
+    # Smart alerts
     # -------------------------------------------------
 
     alerts = []
 
-    # বৃষ্টি
+    # Rain
     if next_1_prob >= 70:
         alerts.append(
-            "🌧️ আগামী ১ ঘণ্টায় বৃষ্টির সম্ভাবনা বেশি।"
+            "🌧️ আগামী ১ ঘণ্টায় বৃষ্টির সম্ভাবনা খুব বেশি।"
         )
 
     elif next_1_prob >= 50:
@@ -229,28 +310,23 @@ def get_weather_report():
             "🌦️ আগামী ১ ঘণ্টায় বৃষ্টির সম্ভাবনা রয়েছে।"
         )
 
-    if next_3_prob >= 70:
+    if next_3_prob >= 80:
         alerts.append(
-            "🌧️ আগামী ৩ ঘণ্টায় বৃষ্টির সম্ভাবনা বেশি।"
+            "🌧️ আগামী ৩ ঘণ্টায় বৃষ্টির সম্ভাবনা খুব বেশি।"
         )
 
     if rain_6 >= 20:
         alerts.append(
-            "⚠️ আগামী ৬ ঘণ্টায় উল্লেখযোগ্য পরিমাণ বৃষ্টির সম্ভাবনা রয়েছে।"
+            "💧 আগামী ৬ ঘণ্টায় উল্লেখযোগ্য বৃষ্টির সম্ভাবনা রয়েছে।"
         )
 
-    # বজ্রঝড়
-    thunderstorm_codes = [95, 96, 99]
-
-    if any(
-        code in thunderstorm_codes
-        for code in next_codes
-    ):
+    # Thunderstorm
+    if thunderstorm:
         alerts.append(
             "⛈️ আগামী কয়েক ঘণ্টায় বজ্রঝড়ের সম্ভাবনা রয়েছে।"
         )
 
-    # বাতাস
+    # Wind
     if (
         wind >= 35
         or gust >= 50
@@ -258,7 +334,7 @@ def get_weather_report():
         or max_next_gust >= 50
     ):
         alerts.append(
-            "💨 বাতাসের গতি/ঝাপটা বেশি হতে পারে—সতর্ক থাকুন।"
+            "💨 বাতাসের গতি/ঝাপটা বেশি হতে পারে।"
         )
 
     if not alerts:
@@ -267,15 +343,15 @@ def get_weather_report():
         )
 
     # -------------------------------------------------
-    # কৃষি পরামর্শ
+    # Agriculture advice
     # -------------------------------------------------
 
     farming = []
 
     if next_1_prob >= 60:
         farming.append(
-            "🌾 বৃষ্টির সম্ভাবনা থাকায় এখন স্প্রে করার আগে "
-            "বৃষ্টির সময় বিবেচনা করুন।"
+            "🌧️ বৃষ্টির সম্ভাবনা বেশি—কৃষি কাজ বা স্প্রে করার "
+            "সময় বৃষ্টির সম্ভাবনা বিবেচনা করুন।"
         )
 
     if next_3_prob >= 60:
@@ -286,17 +362,13 @@ def get_weather_report():
 
     if rain_6 >= 10:
         farming.append(
-            "🌱 অতিরিক্ত বৃষ্টির ক্ষেত্রে জমিতে পানি জমে থাকলে "
-            "নিষ্কাশনের ব্যবস্থা রাখুন।"
+            "🌱 বেশি বৃষ্টি হলে জমিতে পানি জমছে কি না "
+            "নজরে রাখুন এবং প্রয়োজন হলে নিষ্কাশনের ব্যবস্থা করুন।"
         )
 
-    if any(
-        code in thunderstorm_codes
-        for code in next_codes
-    ):
+    if thunderstorm:
         farming.append(
-            "⛈️ বজ্রঝড়ের সময় মাঠে/বরজে কাজ না করে "
-            "নিরাপদ স্থানে থাকুন।"
+            "⛈️ বজ্রঝড়ের সময় মাঠে কাজ না করে নিরাপদ স্থানে থাকুন।"
         )
 
     if temperature >= 35:
@@ -316,64 +388,237 @@ def get_weather_report():
         )
 
     # -------------------------------------------------
-    # সময়
+    # Today's forecast
     # -------------------------------------------------
 
-    now = now_dt.strftime(
+    today_max = daily[
+        "temperature_2m_max"
+    ][0]
+
+    today_min = daily[
+        "temperature_2m_min"
+    ][0]
+
+    today_rain = daily[
+        "precipitation_sum"
+    ][0]
+
+    today_rain_probability = daily[
+        "precipitation_probability_max"
+    ][0]
+
+    return {
+        "temperature": temperature,
+        "feels_like": feels_like,
+        "humidity": humidity,
+        "rain_now": rain_now,
+        "wind": wind,
+        "gust": gust,
+        "condition": condition,
+
+        "next_1_prob": next_1_prob,
+        "next_3_prob": next_3_prob,
+        "next_6_prob": next_6_prob,
+
+        "rain_1": rain_1,
+        "rain_3": rain_3,
+        "rain_6": rain_6,
+
+        "today_max": today_max,
+        "today_min": today_min,
+        "today_rain": today_rain,
+        "today_rain_probability": today_rain_probability,
+
+        "max_next_wind": max_next_wind,
+        "max_next_gust": max_next_gust,
+
+        "thunderstorm": thunderstorm,
+
+        "risk_icon": risk_icon,
+        "risk_name": risk_name,
+        "risk_description": risk_description,
+
+        "alerts": alerts,
+        "farming": farming
+    }
+
+
+def get_smart_change(data):
+
+    global LAST_SNAPSHOT
+
+    if LAST_SNAPSHOT is None:
+
+        LAST_SNAPSHOT = {
+            "next_3_prob": data["next_3_prob"],
+            "next_6_prob": data["next_6_prob"],
+            "rain_6": data["rain_6"],
+            "thunderstorm": data["thunderstorm"],
+            "wind": data["wind"],
+            "gust": data["gust"]
+        }
+
+        return "🆕 প্রথম আপডেট — নতুন আবহাওয়া তথ্য পাওয়া গেছে।"
+
+    previous = LAST_SNAPSHOT
+
+    changes = []
+
+    # Rain probability change
+    rain_change = (
+        data["next_6_prob"]
+        - previous["next_6_prob"]
+    )
+
+    if rain_change >= 30:
+
+        changes.append(
+            f"🌧️ বৃষ্টির সম্ভাবনা বেড়েছে "
+            f"{previous['next_6_prob']}% → "
+            f"{data['next_6_prob']}%"
+        )
+
+    elif rain_change <= -30:
+
+        changes.append(
+            f"☀️ বৃষ্টির সম্ভাবনা কমেছে "
+            f"{previous['next_6_prob']}% → "
+            f"{data['next_6_prob']}%"
+        )
+
+    # Rain amount change
+    rain_amount_change = (
+        data["rain_6"]
+        - previous["rain_6"]
+    )
+
+    if rain_amount_change >= 10:
+
+        changes.append(
+            f"💧 সম্ভাব্য বৃষ্টির পরিমাণ বেড়েছে "
+            f"{previous['rain_6']:.1f} → "
+            f"{data['rain_6']:.1f} mm"
+        )
+
+    # Thunderstorm change
+    if (
+        data["thunderstorm"]
+        and not previous["thunderstorm"]
+    ):
+
+        changes.append(
+            "⛈️ নতুন করে বজ্রঝড়ের সম্ভাবনা দেখা দিয়েছে।"
+        )
+
+    elif (
+        not data["thunderstorm"]
+        and previous["thunderstorm"]
+    ):
+
+        changes.append(
+            "🌤️ আগের তুলনায় বজ্রঝড়ের সম্ভাবনা কমেছে।"
+        )
+
+    # Wind change
+    wind_change = (
+        data["gust"]
+        - previous["gust"]
+    )
+
+    if wind_change >= 15:
+
+        changes.append(
+            f"💨 বাতাসের ঝাপটা বেড়েছে "
+            f"{previous['gust']:.1f} → "
+            f"{data['gust']:.1f} km/h"
+        )
+
+    # Save current snapshot
+    LAST_SNAPSHOT = {
+        "next_3_prob": data["next_3_prob"],
+        "next_6_prob": data["next_6_prob"],
+        "rain_6": data["rain_6"],
+        "thunderstorm": data["thunderstorm"],
+        "wind": data["wind"],
+        "gust": data["gust"]
+    }
+
+    if not changes:
+
+        return (
+            "🟢 বড় কোনো পরিবর্তন নেই — "
+            "আবহাওয়া মোটামুটি স্থিতিশীল।"
+        )
+
+    return "\n".join(
+        f"• {change}"
+        for change in changes
+    )
+
+
+def get_weather_report():
+
+    data = get_weather_data()
+
+    weather = analyze_weather(data)
+
+    smart_change = get_smart_change(weather)
+
+    now = datetime.now(
+        ZoneInfo(TIMEZONE)
+    ).strftime(
         "%d-%m-%Y %I:%M %p"
     )
 
-    # -------------------------------------------------
-    # Text তৈরি
-    # -------------------------------------------------
-
     alert_text = "\n".join(
         f"• {item}"
-        for item in alerts
+        for item in weather["alerts"]
     )
 
     farming_text = "\n".join(
         f"• {item}"
-        for item in farming
+        for item in weather["farming"]
     )
 
     message = f"""
-🌦️ চুয়াডাঙ্গা আবহাওয়া আপডেট
+🌦️ চুয়াডাঙ্গা স্মার্ট আবহাওয়া
 
-🕐 সময়: {now}
+🕐 {now}
+
+━━━━━━━━━━━━━━━━━━
+
+{weather["risk_icon"]} আবহাওয়ার অবস্থা: {weather["risk_name"]}
+{weather["risk_description"]}
 
 ━━━━━━━━━━━━━━━━━━
 
 🌡️ বর্তমান অবস্থা
 
-🌡️ তাপমাত্রা: {temperature}°C
-🤒 অনুভূত: {feels_like}°C
-💧 আর্দ্রতা: {humidity}%
-☁️ অবস্থা: {condition}
-🌧️ বর্তমানে বৃষ্টি: {rain_now} mm
-💨 বাতাস: {wind} km/h
-💨 সর্বোচ্চ ঝাপটা: {gust} km/h
+🌡️ তাপমাত্রা: {weather["temperature"]}°C
+🤒 অনুভূত: {weather["feels_like"]}°C
+💧 আর্দ্রতা: {weather["humidity"]}%
+☁️ অবস্থা: {weather["condition"]}
+🌧️ বর্তমানে বৃষ্টি: {weather["rain_now"]} mm
+💨 বাতাস: {weather["wind"]} km/h
+💨 সর্বোচ্চ ঝাপটা: {weather["gust"]} km/h
 
 ━━━━━━━━━━━━━━━━━━
 
-🌧️ আগামী কয়েক ঘণ্টার বৃষ্টি
+🌧️ আগামী কয়েক ঘণ্টা
 
-⏱️ ১ ঘণ্টা: {next_1_prob}%
-⏱️ ৩ ঘণ্টা: {next_3_prob}%
-⏱️ ৬ ঘণ্টা: {next_6_prob}%
+⏱️ ১ ঘণ্টা: {weather["next_1_prob"]}%
+⏱️ ৩ ঘণ্টা: {weather["next_3_prob"]}%
+⏱️ ৬ ঘণ্টা: {weather["next_6_prob"]}%
 
-💧 ১ ঘণ্টায়: {rain_1:.1f} mm
-💧 ৩ ঘণ্টায়: {rain_3:.1f} mm
-💧 ৬ ঘণ্টায়: {rain_6:.1f} mm
+💧 ১ ঘণ্টায়: {weather["rain_1"]:.1f} mm
+💧 ৩ ঘণ্টায়: {weather["rain_3"]:.1f} mm
+💧 ৬ ঘণ্টায়: {weather["rain_6"]:.1f} mm
 
 ━━━━━━━━━━━━━━━━━━
 
-📅 আজকের পূর্বাভাস
+🔄 সর্বশেষ আপডেটের পরিবর্তন
 
-🌡️ সর্বোচ্চ: {today_max}°C
-🌡️ সর্বনিম্ন: {today_min}°C
-🌧️ বৃষ্টির সম্ভাবনা: {today_rain_probability}%
-💧 সম্ভাব্য বৃষ্টি: {today_rain} mm
+{smart_change}
 
 ━━━━━━━━━━━━━━━━━━
 
@@ -389,8 +634,17 @@ def get_weather_report():
 
 ━━━━━━━━━━━━━━━━━━
 
-🤖 বাংলা কৃষি ও আবহাওয়া বট
-🕐 স্বয়ংক্রিয় আপডেট
+📅 আজ
+
+🌡️ সর্বোচ্চ: {weather["today_max"]}°C
+🌡️ সর্বনিম্ন: {weather["today_min"]}°C
+🌧️ বৃষ্টির সম্ভাবনা: {weather["today_rain_probability"]}%
+💧 সম্ভাব্য বৃষ্টি: {weather["today_rain"]} mm
+
+━━━━━━━━━━━━━━━━━━
+
+🤖 বাংলা স্মার্ট আবহাওয়া বট
+🕐 প্রতি ১৫ মিনিটে স্বয়ংক্রিয় আপডেট
 """
 
     return message.strip()
@@ -414,27 +668,15 @@ def send_message(chat_id, text):
     response.raise_for_status()
 
 
-# -------------------------------------------------
-# Home
-# -------------------------------------------------
-
 @app.route("/")
 def home():
-    return "🌦️ বাংলা আবহাওয়া বট চালু আছে!"
+    return "🌦️ বাংলা স্মার্ট আবহাওয়া বট চালু আছে!"
 
-
-# -------------------------------------------------
-# Health Check
-# -------------------------------------------------
 
 @app.route("/health")
 def health():
     return "", 204
 
-
-# -------------------------------------------------
-# Cron Weather
-# -------------------------------------------------
 
 @app.route("/cron/weather")
 def cron_weather():
@@ -473,10 +715,6 @@ def cron_weather():
         return "", 500
 
 
-# -------------------------------------------------
-# Telegram Webhook
-# -------------------------------------------------
-
 @app.route(
     "/webhook",
     methods=["POST"]
@@ -504,20 +742,18 @@ def webhook():
         ""
     ).lower().strip()
 
-    # /start
     if text == "/start":
 
         send_message(
             chat_id,
             "🌦️ স্বাগতম!\n\n"
-            "আমি বাংলা আবহাওয়া বট।\n\n"
+            "আমি বাংলা স্মার্ট আবহাওয়া বট।\n\n"
             "🌤️ /weather — বর্তমান আবহাওয়া\n"
             "🌧️ /rain — বৃষ্টির তথ্য\n"
             "📅 /forecast — পূর্বাভাস\n"
             "❓ /help — সাহায্য"
         )
 
-    # /weather
     elif text == "/weather":
 
         try:
@@ -539,7 +775,6 @@ def webhook():
                 "❌ আবহাওয়ার তথ্য আনতে সমস্যা হয়েছে।"
             )
 
-    # /rain
     elif text == "/rain":
 
         try:
@@ -561,7 +796,6 @@ def webhook():
                 "❌ বৃষ্টির তথ্য আনতে সমস্যা হয়েছে।"
             )
 
-    # /forecast
     elif text == "/forecast":
 
         try:
@@ -583,12 +817,11 @@ def webhook():
                 "❌ পূর্বাভাস আনতে সমস্যা হয়েছে।"
             )
 
-    # /help
     elif text == "/help":
 
         send_message(
             chat_id,
-            "🤖 বাংলা কৃষি ও আবহাওয়া বট\n\n"
+            "🤖 বাংলা স্মার্ট আবহাওয়া বট\n\n"
             "/start — বট চালু করুন\n"
             "/weather — বর্তমান আবহাওয়া\n"
             "/rain — বৃষ্টির তথ্য\n"
@@ -598,10 +831,6 @@ def webhook():
 
     return "OK"
 
-
-# -------------------------------------------------
-# Run
-# -------------------------------------------------
 
 if __name__ == "__main__":
 
