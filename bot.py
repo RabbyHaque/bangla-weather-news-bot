@@ -256,21 +256,19 @@ def health():
 
 @app.route("/cron/weather")
 def cron_weather():
-
     # নিরাপত্তা যাচাই
     provided_key = request.headers.get("X-Cron-Key")
 
     if not CRON_SECRET:
-        return "CRON_SECRET not configured", 500
+        return "", 500
 
     if provided_key != CRON_SECRET:
-        return "Unauthorized", 401
+        return "", 401
 
     if not CHAT_ID:
-        return "CHAT_ID not configured", 500
+        return "", 500
 
     try:
-
         message = get_weather_report()
 
         send_message(
@@ -278,14 +276,12 @@ def cron_weather():
             message
         )
 
-        return "Weather sent successfully", 200
+        # কোনো response body পাঠানো হবে না
+        return "", 204
 
     except Exception as e:
-
         print("ERROR:", str(e))
-
-        return "Weather update failed", 500
-
+        return "", 500
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
